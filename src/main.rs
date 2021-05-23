@@ -61,11 +61,10 @@ async fn create_job(k8s_client: Client, job: Job) -> Result<impl Reply, Infallib
             warp::reply::json(&json!({"message": "ok"})),
             http::StatusCode::CREATED,
         )),
-        Err(e) => {
-            Ok(warp::reply::with_status(
+        Err(e) => Ok(warp::reply::with_status(
             warp::reply::json(&json!({"message": e.to_string()})),
             http::StatusCode::BAD_REQUEST,
-        ))},
+        )),
     }
 }
 
