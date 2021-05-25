@@ -24,12 +24,18 @@ interface PodContainer {
   image: string
   command: string[]
   args: string[]
-  env: EnvValue[]
+  env: EnvVar[]
 }
 
-interface EnvValue {
+interface EnvVar {
   name: string
   value: string
+  value_from: unknown
+}
+
+interface JobForm {
+  cronjob_data: CronJobData
+  spec: JobSpecForm
 }
 
 interface JobSpecForm {
@@ -41,7 +47,7 @@ interface ContainerForm {
   image: string
   command: StringForm[]
   args: StringForm[]
-  env: EnvValue[]
+  env: EnvVar[]
 }
 
 interface StringForm {
@@ -58,16 +64,30 @@ const newContainerForm = (): ContainerForm => {
   }
 }
 
-const stringToStringForm = (s: string[]): StringForm[] => {
+const stringsToStringForms = (s: string[]): StringForm[] => {
   return s.map(s => ({ value: s }))
+}
+
+const stringsFormTostrings = (s: StringForm[]): string[] => {
+  return s.map(s => s.value)
 }
 
 const containersToContainerForms = (containers: PodContainer[]): ContainerForm[] => {
   return containers.map(c => ({
     name: c.name,
     image: c.image,
-    command: stringToStringForm(c.command),
-    args: stringToStringForm(c.args),
+    command: stringsToStringForms(c.command),
+    args: stringsToStringForms(c.args),
+    env: c.env,
+  }))
+}
+
+const containerFormsToContainers = (containerForms: ContainerForm[]): PodContainer[] => {
+  return containerForms.map(c => ({
+    name: c.name,
+    image: c.image,
+    command: stringsFormTostrings(c.command),
+    args: stringsFormTostrings(c.args),
     env: c.env,
   }))
 }
@@ -83,14 +103,31 @@ const fetchJobs = async (namespace: string): Promise<Job[]> => {
   return data
 }
 
+const createJob = async(job: Job): Promise<string> => {
+  const url = "/api/job"
+  const r = await fetch(url, {
+    method: "POST",
+    body: JSON.stringify(job),
+    headers: new Headers({
+      "Content-Type": "application/json",
+    }),
+  })
+  const data = await r.json()
+
+  if (!r.ok) {
+    throw data['message']
+  }
+  return data['message']
+}
+
 interface CommandsFormProps {
-  control: Control<JobSpecForm>
+  control: Control<JobForm>
   containerIndex: number
   fieldName: "command" | "args"
 }
 
 const CommandsForm: FC<CommandsFormProps> = ({ control, containerIndex, fieldName }) => {
-  const { fields, append, remove } = useFieldArray({ control, name: `containers.${containerIndex}.${fieldName}` as const })
+  const { fields, append, remove } = useFieldArray({ control, name: `spec.containers.${containerIndex}.${fieldName}` as `spec.containers.0.command` })
 
   return (
     <Grid container spacing={1}>
@@ -101,13 +138,13 @@ const CommandsForm: FC<CommandsFormProps> = ({ control, containerIndex, fieldNam
             <Grid container>
               <Grid item xs={10}>
                 <Controller
-                  name={`containers.${containerIndex}.${fieldName}.${index}.value` as const}
+                  name={`spec.containers.${containerIndex}.${fieldName}.${index}.value` as const}
                   control={control}
                   rules={{ required: true }}
+                  defaultValue={command.value}
                   render={({ field }) => (
                     <TextField
                       {...field}
-                      defaultValue={command.value}
                       variant="outlined"
                       fullWidth
                     />
@@ -124,19 +161,19 @@ const CommandsForm: FC<CommandsFormProps> = ({ control, containerIndex, fieldNam
         ))
       }
       <Grid item xs={12}>
-        <Button onClick={() => append({ value: "" })}>Add</Button>
+        <Button onClick={() => append({ value: "" })} variant="outlined" color="primary">Add</Button>
       </Grid>
     </Grid>
   )
 }
 
 interface EnvFormProps {
-  control: Control<JobSpecForm>
+  control: Control<JobForm>
   containerIndex: number
 }
 
 const EnvForm: FC<EnvFormProps> = ({ control, containerIndex }) => {
-  const { fields, append, remove } = useFieldArray({ control, name: `containers.${containerIndex}.env` as const })
+  const { fields, append, remove } = useFieldArray({ control, name: `spec.containers.${containerIndex}.env` as `spec.containers.0.env` })
 
   return (
     <Grid container spacing={1}>
@@ -147,13 +184,13 @@ const EnvForm: FC<EnvFormProps> = ({ control, containerIndex }) => {
             <Grid container>
               <Grid item xs={5}>
                 <Controller
-                  name={`containers.${containerIndex}.env.${index}.name` as const}
+                  name={`spec.containers.${containerIndex}.env.${index}.name` as const}
                   control={control}
+                  defaultValue={envValue.name}
                   rules={{ required: true }}
                   render={({ field }) => (
                     <TextField
                       {...field}
-                      defaultValue={envValue.name}
                       variant="outlined"
                       fullWidth
                     />
@@ -162,13 +199,12 @@ const EnvForm: FC<EnvFormProps> = ({ control, containerIndex }) => {
               </Grid>
               <Grid item xs={5}>
                 <Controller
-                  name={`containers.${containerIndex}.env.${index}.value` as const}
+                  name={`spec.containers.${containerIndex}.env.${index}.value` as const}
                   control={control}
-                  rules={{ required: true }}
+                  defaultValue={envValue.value}
                   render={({ field }) => (
                     <TextField
                       {...field}
-                      defaultValue={envValue.value}
                       variant="outlined"
                       fullWidth
                     />
@@ -185,7 +221,7 @@ const EnvForm: FC<EnvFormProps> = ({ control, containerIndex }) => {
         ))
       }
       <Grid item xs={12}>
-        <Button onClick={() => append({ value: "" })}>Add</Button>
+        <Button onClick={() => append({ value: "" })} variant="outlined" color="primary">Add</Button>
       </Grid>
     </Grid>
   )
@@ -203,17 +239,36 @@ const App = () => {
     })
   }, [])
 
-  const { control, setValue } = useForm<JobSpecForm>({
+  const { control, setValue, handleSubmit, formState: { errors } } = useForm<JobForm>({
     defaultValues: {
-      containers: [],
+      cronjob_data: {
+        name: "",
+        namespace: "",
+      },
+      spec: {
+        containers: [],
+      },
     },
   });
   const { fields, append, remove } = useFieldArray({
     control,
-    name: 'containers'
+    name: 'spec.containers'
   })
 
-  console.log(fields)
+  const onSubmit = (data: JobForm) => {
+    const request: Job = {
+      cronjob_data: data.cronjob_data,
+      spec: {
+        containers: containerFormsToContainers(data.spec.containers),
+      },
+    }
+    createJob(request).then(mes => {
+      console.log(mes)
+    }).catch(e => {
+      console.error(e)
+    })
+  }
+
   return (
     <div className="App">
       <Container style={{ paddingTop: 10 }}>
@@ -243,7 +298,10 @@ const App = () => {
                   <Autocomplete
                     options={jobs.filter(j => namespace === "" || j.cronjob_data.namespace === namespace)}
                     getOptionLabel={option => option.cronjob_data.name}
-                    onChange={(_, t) => setValue("containers", containersToContainerForms(t?.spec.containers || []))}
+                    onChange={(_, t) => {
+                      setValue("cronjob_data", t?.cronjob_data || { name: "", namespace: "" })
+                      setValue("spec.containers", containersToContainerForms(t?.spec.containers || []))
+                    }}
                     fullWidth
                     renderInput={(params) => <TextField {...params} label="cronjob" variant="outlined" />}
                   />
@@ -253,83 +311,91 @@ const App = () => {
           </CardContent>
         </Card>
 
-        <Typography variant="h4">Containers</Typography>
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <Grid container spacing={2} style={{ marginTop: 10 }}>
+            <Grid item xs={12}>
+              <Typography variant="h4">Containers</Typography>
+            </Grid>
 
-        <form>
-          {
-            fields.map((job, index) => (
-              <Accordion key={job.id}>
-                <AccordionSummary
-                  expandIcon={<ExpandMoreIcon />}
-                  aria-controls={`container-${index}`}
-                  id={`container-${index}`}
-                >
-                  <Typography>{job.name}</Typography>
-                  <IconButton onClick={() => remove(index)} style={{marginLeft: 10, padding: 0}}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Grid container key={job.id} spacing={2}>
-                    <Grid item xs={12}>
-                      <Controller
-                        name={`containers.${index}.name` as const}
-                        control={control}
-                        rules={{ required: true }}
-                        defaultValue={job.name}
-                        render={({ field: { onChange, onBlur, value, ref, name } }) => {
-                          console.log(value, name)
-                          return (
-                            <TextField
-                              label="name"
-                              fullWidth
-                              variant="outlined"
-                              onChange={onChange}
-                              onBlur={onBlur}
-                              value={value}
-                              inputRef={ref}
-                            />
-                          )
-                        }}
-                      />
-                    </Grid>
-
-                    <Grid item xs={12}>
-                      <Controller
-                        name={`containers.${index}.image` as const}
-                        control={control}
-                        rules={{ required: true }}
-                        defaultValue={job.image}
-                        render={({ field }) => (
-                          <TextField
-                            {...field}
-                            label="image"
-                            fullWidth
-                            variant="outlined"
+            <Grid item xs={12}>
+              {
+                fields.map((job, index) => (
+                  <Accordion key={job.id}>
+                    <AccordionSummary
+                      expandIcon={<ExpandMoreIcon />}
+                      aria-controls={`container-${index}`}
+                      id={`container-${index}`}
+                    >
+                      <Typography>{job.name}</Typography>
+                      <IconButton onClick={() => remove(index)} style={{ marginLeft: 10, padding: 0 }}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Grid container key={job.id} spacing={2}>
+                        <Grid item xs={12}>
+                          <Controller
+                            name={`spec.containers.${index}.name` as const}
+                            control={control}
+                            rules={{ required: true }}
+                            defaultValue={job.name}
+                            render={({ field: { onChange, onBlur, value, ref } }) => {
+                              return (
+                                <TextField
+                                  label="name"
+                                  fullWidth
+                                  variant="outlined"
+                                  onChange={onChange}
+                                  onBlur={onBlur}
+                                  value={value}
+                                  inputRef={ref}
+                                />
+                              )
+                            }}
                           />
-                        )}
-                      />
-                    </Grid>
+                        </Grid>
 
-                    <Grid item xs={12}>
-                      <CommandsForm control={control} containerIndex={index} fieldName="command" />
-                    </Grid>
+                        <Grid item xs={12}>
+                          <Controller
+                            name={`spec.containers.${index}.image` as const}
+                            control={control}
+                            rules={{ required: true }}
+                            defaultValue={job.image}
+                            render={({ field }) => (
+                              <TextField
+                                {...field}
+                                label="image"
+                                fullWidth
+                                variant="outlined"
+                              />
+                            )}
+                          />
+                        </Grid>
 
-                    <Grid item xs={12}>
-                      <CommandsForm control={control} containerIndex={index} fieldName="args" />
-                    </Grid>
+                        <Grid item xs={12}>
+                          <CommandsForm control={control} containerIndex={index} fieldName="command" />
+                        </Grid>
 
-                    <Grid item xs={12}>
-                      <EnvForm control={control} containerIndex={index} />
-                    </Grid>
+                        <Grid item xs={12}>
+                          <CommandsForm control={control} containerIndex={index} fieldName="args" />
+                        </Grid>
 
-                  </Grid>
-                </AccordionDetails>
-              </Accordion>
-            ))
-          }
-          <Button onClick={() => append(newContainerForm())}>Add container</Button>
-          <Button type="submit">Create Job</Button>
+                        <Grid item xs={12}>
+                          <EnvForm control={control} containerIndex={index} />
+                        </Grid>
+
+                      </Grid>
+                    </AccordionDetails>
+                  </Accordion>
+                ))
+              }
+            </Grid>
+
+            <Grid item xs={12}>
+              <Button onClick={() => append(newContainerForm())} variant="outlined" color="primary">Add container</Button>
+              <Button type="submit" variant="contained" color="primary" style={{ marginLeft: 5 }}>Create Job</Button>
+            </Grid>
+          </Grid>
         </form>
       </Container>
     </div>
