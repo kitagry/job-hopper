@@ -1,6 +1,6 @@
-use k8s_openapi::api::core::v1::{EnvVar, PodSpec, Container as K8sContainer};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::batch::v1beta1::CronJob;
+use k8s_openapi::api::core::v1::{Container as K8sContainer, EnvVar, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{
     api::{Api, ListParams, PostParams},
@@ -8,7 +8,7 @@ use kube::{
 };
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
 use warp::{Filter, Reply};
@@ -77,7 +77,7 @@ impl Container {
             image: c.image.unwrap_or("".to_string()),
             command: c.command.unwrap_or(Vec::new()),
             args: c.args.unwrap_or(Vec::new()),
-            env: c.env.unwrap_or(Vec::new())
+            env: c.env.unwrap_or(Vec::new()),
         }
     }
 }
@@ -125,20 +125,22 @@ async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, 
     let cronjobs: Api<CronJob> = Api::namespaced(k8s_client.clone(), &job.cronjob_data.namespace);
     let cronjob = match cronjobs.get(&job.cronjob_data.name).await {
         Ok(c) => c,
-        Err(e) => return Ok(warp::reply::with_status(
-            warp::reply::json(&json!({"message": e.to_string()})),
-            http::StatusCode::BAD_REQUEST,
-        )),
+        Err(e) => {
+            return Ok(warp::reply::with_status(
+                warp::reply::json(&json!({"message": e.to_string()})),
+                http::StatusCode::BAD_REQUEST,
+            ))
+        }
     };
 
     let mut job_spec = cronjob.spec.unwrap().job_template.spec.unwrap();
     let pod_spec = job_spec.template.spec.unwrap();
-    job_spec.template.spec = Some(PodSpec{
+    job_spec.template.spec = Some(PodSpec {
         containers: merge_job_container(pod_spec.containers, job.spec.containers),
         ..pod_spec
     });
-    let new_job = Job{
-        metadata: ObjectMeta{
+    let new_job = Job {
+        metadata: ObjectMeta {
             name: Some(create_tmp_job_name(job.cronjob_data.name)),
             namespace: Some(job.cronjob_data.namespace.clone()),
             ..Default::default()
@@ -161,26 +163,44 @@ async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, 
 }
 
 fn merge_job_container(base: Vec<K8sContainer>, compare: Vec<Container>) -> Vec<K8sContainer> {
-    let mut result: Vec<K8sContainer> = base.iter().filter_map(|b| {
-        let c = match compare.iter().filter(|c| c.name == b.name).next() {
-            Some(c) => c,
-            None => return None
-        };
-        let mut container = b.clone();
-        container.image = Some(c.image.clone());
-        container.command = match c.command.len() { 0 => None, _ => Some(c.command.clone())};
-        container.args = match c.args.len() { 0 => None, _ => Some(c.args.clone())};
-        container.env = match c.env.len() { 0 => None, _ => Some(c.env.clone())};
-        Some(container)
-    }).collect();
-    result.extend(compare.iter().filter(|c| base.iter().all(|b| b.name != c.name)).map(|b| K8sContainer{
-        name: b.name.clone(),
-        image: Some(b.image.clone()),
-        command: Some(b.command.clone()),
-        args: Some(b.args.clone()),
-        env: Some(b.env.clone()),
-        ..Default::default()
-    }).collect::<Vec<K8sContainer>>());
+    let mut result: Vec<K8sContainer> = base
+        .iter()
+        .filter_map(|b| {
+            let c = match compare.iter().filter(|c| c.name == b.name).next() {
+                Some(c) => c,
+                None => return None,
+            };
+            let mut container = b.clone();
+            container.image = Some(c.image.clone());
+            container.command = match c.command.len() {
+                0 => None,
+                _ => Some(c.command.clone()),
+            };
+            container.args = match c.args.len() {
+                0 => None,
+                _ => Some(c.args.clone()),
+            };
+            container.env = match c.env.len() {
+                0 => None,
+                _ => Some(c.env.clone()),
+            };
+            Some(container)
+        })
+        .collect();
+    result.extend(
+        compare
+            .iter()
+            .filter(|c| base.iter().all(|b| b.name != c.name))
+            .map(|b| K8sContainer {
+                name: b.name.clone(),
+                image: Some(b.image.clone()),
+                command: Some(b.command.clone()),
+                args: Some(b.args.clone()),
+                env: Some(b.env.clone()),
+                ..Default::default()
+            })
+            .collect::<Vec<K8sContainer>>(),
+    );
     result
 }
 
@@ -207,7 +227,19 @@ async fn main() -> anyhow::Result<()> {
         .and(json_body())
         .and_then(create_job);
 
-    let routes = list_cronjobs.or(create_job);
+    let index_file = warp::get()
+        .and(warp::path::end())
+        .and(warp::fs::file("./build/index.html"));
+
+    let static_files = warp::path("static").and(warp::fs::dir("./build/static"));
+
+    let other_static_files = warp::fs::dir("./build/");
+
+    let routes = other_static_files
+        .or(list_cronjobs)
+        .or(create_job)
+        .or(index_file)
+        .or(static_files);
 
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
     Ok(())
