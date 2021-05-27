@@ -5,6 +5,7 @@ import MuiAlert from '@material-ui/lab/Alert'
 import { useForm, Controller, useFieldArray } from 'react-hook-form'
 import ExpandMoreIcon from '@material-ui/icons/ExpandMore'
 import DeleteIcon from '@material-ui/icons/Delete'
+import { SubmitButton } from './atoms'
 import { CommandsForm, EnvForm } from './components'
 import { Job, PodContainer, JobForm, ContainerForm, StringForm } from './models'
 
@@ -83,6 +84,7 @@ interface snackbarMessage {
 const App = () => {
   const [namespace, setNamespace] = useState<string>("")
   const [jobs, setJobs] = useState<Job[]>([])
+  const [isSending, setIsSending] = useState<boolean>(false)
 
   const [snackbarMessage, setSnackbarMessage] = useState<snackbarMessage>({
     open: false,
@@ -97,193 +99,198 @@ const App = () => {
     }))
   }
 
-useEffect(() => {
-  fetchJobs(namespace).then(j => {
-    setJobs(j)
-  }).catch(e => {
-    setSnackbarMessage({
-      open: true,
-      serverity: "error",
-      message: e,
+  useEffect(() => {
+    fetchJobs(namespace).then(j => {
+      setJobs(j)
+    }).catch(e => {
+      setSnackbarMessage({
+        open: true,
+        serverity: "error",
+        message: e,
+      })
     })
+  }, [])
+
+  const { control, setValue, handleSubmit } = useForm<JobForm>({
+    defaultValues: {
+      cronjob_data: {
+        name: "",
+        namespace: "",
+      },
+      spec: {
+        containers: [],
+      },
+    },
+  });
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'spec.containers'
   })
-}, [])
 
-const { control, setValue, handleSubmit } = useForm<JobForm>({
-  defaultValues: {
-    cronjob_data: {
-      name: "",
-      namespace: "",
-    },
-    spec: {
-      containers: [],
-    },
-  },
-});
-const { fields, append, remove } = useFieldArray({
-  control,
-  name: 'spec.containers'
-})
-
-const onSubmit = (data: JobForm) => {
-  const request: Job = {
-    cronjob_data: data.cronjob_data,
-    spec: {
-      containers: containerFormsToContainers(data.spec.containers),
-    },
+  const onSubmit = (data: JobForm) => {
+    setIsSending(true)
+    const request: Job = {
+      cronjob_data: data.cronjob_data,
+      spec: {
+        containers: containerFormsToContainers(data.spec.containers),
+      },
+    }
+    createJob(request).then(mes => {
+      setSnackbarMessage({
+        open: true,
+        serverity: "success",
+        message: mes,
+      })
+    }).catch(e => {
+      setSnackbarMessage({
+        open: true,
+        serverity: "error",
+        message: e,
+      })
+    }).finally(() => {
+      setIsSending(false)
+    })
   }
-  createJob(request).then(mes => {
-    setSnackbarMessage({
-      open: true,
-      serverity: "success",
-      message: mes,
-    })
-  }).catch(e => {
-    setSnackbarMessage({
-      open: true,
-      serverity: "error",
-      message: e,
-    })
-  })
-}
 
-return (
-  <div className="App">
-    <Container style={{ paddingTop: 10 }}>
-      <Card>
-        <CardContent>
-          <Grid container spacing={2}>
-            <Grid item xs={12}>
-              <Typography variant="h5">Select template cronjob</Typography>
+  return (
+    <div className="App">
+      <Container style={{ paddingTop: 10 }}>
+        <Card>
+          <CardContent>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <Typography variant="h5">Select template cronjob</Typography>
+              </Grid>
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <Autocomplete
+                    options={Array.from(new Set(jobs.map(j => j.cronjob_data.namespace)))}
+                    onChange={(_, n) => setNamespace(n || "")}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="namespace"
+                        variant="outlined" />
+                    )}
+                  />
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <Autocomplete
+                    options={jobs.filter(j => namespace === "" || j.cronjob_data.namespace === namespace)}
+                    getOptionLabel={option => option.cronjob_data.name}
+                    onChange={(_, t) => {
+                      setValue("cronjob_data", t?.cronjob_data || { name: "", namespace: "" })
+                      setValue("spec.containers", containersToContainerForms(t?.spec.containers || []))
+                    }}
+                    fullWidth
+                    renderInput={(params) => <TextField {...params} label="cronjob" variant="outlined" />}
+                  />
+                </FormControl>
+              </Grid>
             </Grid>
+          </CardContent>
+        </Card>
+
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <Grid container spacing={2} style={{ marginTop: 10 }}>
             <Grid item xs={12}>
-              <FormControl fullWidth>
-                <Autocomplete
-                  options={Array.from(new Set(jobs.map(j => j.cronjob_data.namespace)))}
-                  onChange={(_, n) => setNamespace(n || "")}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      label="namespace"
-                      variant="outlined" />
-                  )}
-                />
-              </FormControl>
+              <Typography variant="h4">Containers</Typography>
             </Grid>
 
             <Grid item xs={12}>
-              <FormControl fullWidth>
-                <Autocomplete
-                  options={jobs.filter(j => namespace === "" || j.cronjob_data.namespace === namespace)}
-                  getOptionLabel={option => option.cronjob_data.name}
-                  onChange={(_, t) => {
-                    setValue("cronjob_data", t?.cronjob_data || { name: "", namespace: "" })
-                    setValue("spec.containers", containersToContainerForms(t?.spec.containers || []))
-                  }}
-                  fullWidth
-                  renderInput={(params) => <TextField {...params} label="cronjob" variant="outlined" />}
-                />
-              </FormControl>
-            </Grid>
-          </Grid>
-        </CardContent>
-      </Card>
+              {
+                fields.map((job, index) => (
+                  <Accordion key={job.id}>
+                    <AccordionSummary
+                      expandIcon={<ExpandMoreIcon />}
+                      aria-controls={`container-${index}`}
+                      id={`container-${index}`}
+                    >
+                      <Typography>{job.name}</Typography>
+                      <IconButton onClick={() => remove(index)} style={{ marginLeft: 10, padding: 0 }}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Grid container key={job.id} spacing={2}>
+                        <Grid item xs={12}>
+                          <Controller
+                            name={`spec.containers.${index}.name` as const}
+                            control={control}
+                            rules={{ required: true }}
+                            defaultValue={job.name}
+                            render={({ field: { onChange, onBlur, value, ref } }) => {
+                              return (
+                                <TextField
+                                  label="name"
+                                  fullWidth
+                                  variant="outlined"
+                                  onChange={onChange}
+                                  onBlur={onBlur}
+                                  value={value}
+                                  inputRef={ref}
+                                />
+                              )
+                            }}
+                          />
+                        </Grid>
 
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <Grid container spacing={2} style={{ marginTop: 10 }}>
-          <Grid item xs={12}>
-            <Typography variant="h4">Containers</Typography>
-          </Grid>
-
-          <Grid item xs={12}>
-            {
-              fields.map((job, index) => (
-                <Accordion key={job.id}>
-                  <AccordionSummary
-                    expandIcon={<ExpandMoreIcon />}
-                    aria-controls={`container-${index}`}
-                    id={`container-${index}`}
-                  >
-                    <Typography>{job.name}</Typography>
-                    <IconButton onClick={() => remove(index)} style={{ marginLeft: 10, padding: 0 }}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Grid container key={job.id} spacing={2}>
-                      <Grid item xs={12}>
-                        <Controller
-                          name={`spec.containers.${index}.name` as const}
-                          control={control}
-                          rules={{ required: true }}
-                          defaultValue={job.name}
-                          render={({ field: { onChange, onBlur, value, ref } }) => {
-                            return (
+                        <Grid item xs={12}>
+                          <Controller
+                            name={`spec.containers.${index}.image` as const}
+                            control={control}
+                            rules={{ required: true }}
+                            defaultValue={job.image}
+                            render={({ field }) => (
                               <TextField
-                                label="name"
+                                {...field}
+                                label="image"
                                 fullWidth
                                 variant="outlined"
-                                onChange={onChange}
-                                onBlur={onBlur}
-                                value={value}
-                                inputRef={ref}
                               />
-                            )
-                          }}
-                        />
-                      </Grid>
+                            )}
+                          />
+                        </Grid>
 
-                      <Grid item xs={12}>
-                        <Controller
-                          name={`spec.containers.${index}.image` as const}
-                          control={control}
-                          rules={{ required: true }}
-                          defaultValue={job.image}
-                          render={({ field }) => (
-                            <TextField
-                              {...field}
-                              label="image"
-                              fullWidth
-                              variant="outlined"
-                            />
-                          )}
-                        />
-                      </Grid>
+                        <Grid item xs={12}>
+                          <CommandsForm control={control} containerIndex={index} fieldName="command" />
+                        </Grid>
 
-                      <Grid item xs={12}>
-                        <CommandsForm control={control} containerIndex={index} fieldName="command" />
-                      </Grid>
+                        <Grid item xs={12}>
+                          <CommandsForm control={control} containerIndex={index} fieldName="args" />
+                        </Grid>
 
-                      <Grid item xs={12}>
-                        <CommandsForm control={control} containerIndex={index} fieldName="args" />
-                      </Grid>
+                        <Grid item xs={12}>
+                          <EnvForm control={control} containerIndex={index} />
+                        </Grid>
 
-                      <Grid item xs={12}>
-                        <EnvForm control={control} containerIndex={index} />
                       </Grid>
+                    </AccordionDetails>
+                  </Accordion>
+                ))
+              }
+            </Grid>
 
-                    </Grid>
-                  </AccordionDetails>
-                </Accordion>
-              ))
-            }
+            <Grid item xs={12}>
+              <Button onClick={() => append(newContainerForm())} variant="outlined" color="primary">Add container</Button>
+              <div style={{display: 'inline-block', marginLeft: 5}}>
+                <SubmitButton isLoading={isSending}>Create Job</SubmitButton>
+              </div>
+            </Grid>
           </Grid>
+        </form>
+      </Container>
 
-          <Grid item xs={12}>
-            <Button onClick={() => append(newContainerForm())} variant="outlined" color="primary">Add container</Button>
-            <Button type="submit" variant="contained" color="primary" style={{ marginLeft: 5 }}>Create Job</Button>
-          </Grid>
-        </Grid>
-      </form>
-    </Container>
-
-    <Snackbar open={snackbarMessage.open} autoHideDuration={6000} onClose={handleSnackbarClose}>
-      <MuiAlert elevation={6} variant="filled" onClose={handleSnackbarClose} severity={snackbarMessage.serverity}>
-        {snackbarMessage.message}
-      </MuiAlert>
-    </Snackbar>
-  </div>
-);
+      <Snackbar open={snackbarMessage.open} autoHideDuration={6000} onClose={handleSnackbarClose}>
+        <MuiAlert elevation={6} variant="filled" onClose={handleSnackbarClose} severity={snackbarMessage.serverity}>
+          {snackbarMessage.message}
+        </MuiAlert>
+      </Snackbar>
+    </div>
+  );
 }
 
 export default App;
