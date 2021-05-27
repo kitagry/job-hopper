@@ -1,7 +1,4 @@
-import CommandsForm from './CommandsForm'
-import EnvForm from './EnvForm'
+import CommandsForm from './CommandsForm';
+import EnvForm from './EnvForm';
 
-export {
-  CommandsForm,
-  EnvForm
-}
+export { CommandsForm, EnvForm };

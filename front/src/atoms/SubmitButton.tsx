@@ -1,5 +1,5 @@
-import { MouseEventHandler, FC } from 'react'
-import { Button, CircularProgress } from '@material-ui/core'
+import { FC } from 'react';
+import { Button, CircularProgress } from '@material-ui/core';
 import { makeStyles } from '@material-ui/core/styles';
 
 const useStyles = makeStyles((theme) => ({
@@ -21,20 +21,25 @@ const useStyles = makeStyles((theme) => ({
 }));
 
 interface Props {
-  isLoading: boolean
+  isLoading: boolean;
 }
 
-const SubmitButton: FC<Props> = ({ isLoading, children }) => {
-  const classes = useStyles()
+export const SubmitButton: FC<Props> = ({ isLoading, children }) => {
+  const classes = useStyles();
 
   return (
     <div className={classes.wrapper}>
-      <Button type="submit" variant="contained" color="primary" disabled={isLoading}>
+      <Button
+        type="submit"
+        variant="contained"
+        color="primary"
+        disabled={isLoading}
+      >
         {children}
       </Button>
-      { isLoading && <CircularProgress size={24} className={classes.buttonProgress} />}
+      {isLoading && (
+        <CircularProgress size={24} className={classes.buttonProgress} />
+      )}
     </div>
-  )
-}
-
-export default SubmitButton
+  );
+};
