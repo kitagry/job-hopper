@@ -48,8 +48,8 @@ impl JobTemplate {
     fn new(cj: CronJob) -> Self {
         JobTemplate {
             cronjob_data: CronJobData {
-                name: cj.metadata.name.unwrap_or("".to_string()),
-                namespace: cj.metadata.namespace.unwrap_or("".to_string()),
+                name: cj.metadata.name.unwrap_or_else(|| "".to_string()),
+                namespace: cj.metadata.namespace.unwrap_or_else(|| "".to_string()),
             },
             spec: JobSpec {
                 containers: cj
@@ -74,10 +74,10 @@ impl Container {
     fn new(c: k8s_openapi::api::core::v1::Container) -> Self {
         Container {
             name: c.name,
-            image: c.image.unwrap_or("".to_string()),
-            command: c.command.unwrap_or(Vec::new()),
-            args: c.args.unwrap_or(Vec::new()),
-            env: c.env.unwrap_or(Vec::new()),
+            image: c.image.unwrap_or_else(|| "".to_string()),
+            command: c.command.unwrap_or_default(),
+            args: c.args.unwrap_or_default(),
+            env: c.env.unwrap_or_default(),
         }
     }
 }
@@ -86,8 +86,10 @@ async fn list_cronjobs(
     k8s_client: Client,
     params: ListCronJobParam,
 ) -> Result<impl Reply, Infallible> {
-    let cronjobs: Api<CronJob> =
-        Api::namespaced(k8s_client, &params.namespace.unwrap_or("".to_string()));
+    let cronjobs: Api<CronJob> = Api::namespaced(
+        k8s_client,
+        &params.namespace.unwrap_or_else(|| "".to_string()),
+    );
     let lp = ListParams::default().timeout(20);
 
     match cronjobs.list(&lp).await {
@@ -152,7 +154,9 @@ async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, 
     let pp = PostParams::default();
     match jobs.create(&pp, &new_job).await {
         Ok(_) => Ok(warp::reply::with_status(
-            warp::reply::json(&json!({"message": format!("job '{}' was created", new_job.metadata.name.unwrap())})),
+            warp::reply::json(&json!({
+                "message": format!("job '{}' was created", new_job.metadata.name.unwrap())
+            })),
             http::StatusCode::CREATED,
         )),
         Err(e) => Ok(warp::reply::with_status(
@@ -166,7 +170,7 @@ fn merge_job_container(base: Vec<K8sContainer>, compare: Vec<Container>) -> Vec<
     let mut result: Vec<K8sContainer> = base
         .iter()
         .filter_map(|b| {
-            let c = match compare.iter().filter(|c| c.name == b.name).next() {
+            let c = match compare.iter().find(|c| c.name == b.name) {
                 Some(c) => c,
                 None => return None,
             };
