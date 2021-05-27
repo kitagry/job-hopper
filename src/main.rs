@@ -152,7 +152,7 @@ async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, 
     let pp = PostParams::default();
     match jobs.create(&pp, &new_job).await {
         Ok(_) => Ok(warp::reply::with_status(
-            warp::reply::json(&json!({"message": "ok"})),
+            warp::reply::json(&json!({"message": format!("job '{}' was created", new_job.metadata.name.unwrap())})),
             http::StatusCode::CREATED,
         )),
         Err(e) => Ok(warp::reply::with_status(
