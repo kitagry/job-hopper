@@ -1,58 +1,13 @@
-import { FC, useState, useEffect } from 'react';
-import { Container, TextField, Grid, FormControl, Typography, Button, Card, CardContent, Accordion, AccordionSummary, AccordionDetails, IconButton } from '@material-ui/core'
+import { useState, useEffect } from 'react';
+import { Container, TextField, Grid, FormControl, Typography, Button, Card, CardContent, Accordion, AccordionSummary, AccordionDetails, IconButton, Snackbar } from '@material-ui/core'
 import Autocomplete from '@material-ui/lab/Autocomplete'
-import { useForm, Control, Controller, useFieldArray } from 'react-hook-form'
+import MuiAlert from '@material-ui/lab/Alert'
+import { useForm, Controller, useFieldArray } from 'react-hook-form'
 import ExpandMoreIcon from '@material-ui/icons/ExpandMore'
 import DeleteIcon from '@material-ui/icons/Delete'
-
-interface Job {
-  cronjob_data: CronJobData
-  spec: JobSpec
-}
-
-interface CronJobData {
-  name: string
-  namespace: string
-}
-
-interface JobSpec {
-  containers: PodContainer[]
-}
-
-interface PodContainer {
-  name: string
-  image: string
-  command: string[]
-  args: string[]
-  env: EnvVar[]
-}
-
-interface EnvVar {
-  name: string
-  value: string
-  value_from: unknown
-}
-
-interface JobForm {
-  cronjob_data: CronJobData
-  spec: JobSpecForm
-}
-
-interface JobSpecForm {
-  containers: ContainerForm[]
-}
-
-interface ContainerForm {
-  name: string
-  image: string
-  command: StringForm[]
-  args: StringForm[]
-  env: EnvVar[]
-}
-
-interface StringForm {
-  value: string
-}
+import { SubmitButton } from './atoms'
+import { CommandsForm, EnvForm } from './components'
+import { Job, PodContainer, JobForm, ContainerForm, StringForm } from './models'
 
 const newContainerForm = (): ContainerForm => {
   return {
@@ -103,7 +58,7 @@ const fetchJobs = async (namespace: string): Promise<Job[]> => {
   return data
 }
 
-const createJob = async(job: Job): Promise<string> => {
+const createJob = async (job: Job): Promise<string> => {
   const url = "/api/job"
   const r = await fetch(url, {
     method: "POST",
@@ -120,126 +75,43 @@ const createJob = async(job: Job): Promise<string> => {
   return data['message']
 }
 
-interface CommandsFormProps {
-  control: Control<JobForm>
-  containerIndex: number
-  fieldName: "command" | "args"
-}
-
-const CommandsForm: FC<CommandsFormProps> = ({ control, containerIndex, fieldName }) => {
-  const { fields, append, remove } = useFieldArray({ control, name: `spec.containers.${containerIndex}.${fieldName}` as `spec.containers.0.command` })
-
-  return (
-    <Grid container spacing={1}>
-      <Typography>{fieldName}</Typography>
-      {
-        fields.map((command, index) => (
-          <Grid item xs={12} key={command.id}>
-            <Grid container>
-              <Grid item xs={10}>
-                <Controller
-                  name={`spec.containers.${containerIndex}.${fieldName}.${index}.value` as const}
-                  control={control}
-                  rules={{ required: true }}
-                  defaultValue={command.value}
-                  render={({ field }) => (
-                    <TextField
-                      {...field}
-                      variant="outlined"
-                      fullWidth
-                    />
-                  )}
-                />
-              </Grid>
-              <Grid item xs={2}>
-                <IconButton onClick={() => remove(index)}>
-                  <DeleteIcon />
-                </IconButton>
-              </Grid>
-            </Grid>
-          </Grid>
-        ))
-      }
-      <Grid item xs={12}>
-        <Button onClick={() => append({ value: "" })} variant="outlined" color="primary">Add</Button>
-      </Grid>
-    </Grid>
-  )
-}
-
-interface EnvFormProps {
-  control: Control<JobForm>
-  containerIndex: number
-}
-
-const EnvForm: FC<EnvFormProps> = ({ control, containerIndex }) => {
-  const { fields, append, remove } = useFieldArray({ control, name: `spec.containers.${containerIndex}.env` as `spec.containers.0.env` })
-
-  return (
-    <Grid container spacing={1}>
-      <Typography>env</Typography>
-      {
-        fields.map((envValue, index) => (
-          <Grid item xs={12} key={envValue.id}>
-            <Grid container>
-              <Grid item xs={5}>
-                <Controller
-                  name={`spec.containers.${containerIndex}.env.${index}.name` as const}
-                  control={control}
-                  defaultValue={envValue.name}
-                  rules={{ required: true }}
-                  render={({ field }) => (
-                    <TextField
-                      {...field}
-                      variant="outlined"
-                      fullWidth
-                    />
-                  )}
-                />
-              </Grid>
-              <Grid item xs={5}>
-                <Controller
-                  name={`spec.containers.${containerIndex}.env.${index}.value` as const}
-                  control={control}
-                  defaultValue={envValue.value}
-                  render={({ field }) => (
-                    <TextField
-                      {...field}
-                      variant="outlined"
-                      fullWidth
-                    />
-                  )}
-                />
-              </Grid>
-              <Grid item xs={2}>
-                <IconButton onClick={() => remove(index)}>
-                  <DeleteIcon />
-                </IconButton>
-              </Grid>
-            </Grid>
-          </Grid>
-        ))
-      }
-      <Grid item xs={12}>
-        <Button onClick={() => append({ value: "" })} variant="outlined" color="primary">Add</Button>
-      </Grid>
-    </Grid>
-  )
+interface snackbarMessage {
+  open: boolean
+  serverity: "success" | "error"
+  message: string
 }
 
 const App = () => {
   const [namespace, setNamespace] = useState<string>("")
   const [jobs, setJobs] = useState<Job[]>([])
+  const [isSending, setIsSending] = useState<boolean>(false)
+
+  const [snackbarMessage, setSnackbarMessage] = useState<snackbarMessage>({
+    open: false,
+    serverity: "success",
+    message: ""
+  })
+
+  const handleSnackbarClose = () => {
+    setSnackbarMessage(prevState => ({
+      ...prevState,
+      open: false,
+    }))
+  }
 
   useEffect(() => {
     fetchJobs(namespace).then(j => {
       setJobs(j)
     }).catch(e => {
-      console.error(e)
+      setSnackbarMessage({
+        open: true,
+        serverity: "error",
+        message: e,
+      })
     })
   }, [])
 
-  const { control, setValue, handleSubmit, formState: { errors } } = useForm<JobForm>({
+  const { control, setValue, handleSubmit } = useForm<JobForm>({
     defaultValues: {
       cronjob_data: {
         name: "",
@@ -256,6 +128,7 @@ const App = () => {
   })
 
   const onSubmit = (data: JobForm) => {
+    setIsSending(true)
     const request: Job = {
       cronjob_data: data.cronjob_data,
       spec: {
@@ -263,9 +136,19 @@ const App = () => {
       },
     }
     createJob(request).then(mes => {
-      console.log(mes)
+      setSnackbarMessage({
+        open: true,
+        serverity: "success",
+        message: mes,
+      })
     }).catch(e => {
-      console.error(e)
+      setSnackbarMessage({
+        open: true,
+        serverity: "error",
+        message: e,
+      })
+    }).finally(() => {
+      setIsSending(false)
     })
   }
 
@@ -393,11 +276,19 @@ const App = () => {
 
             <Grid item xs={12}>
               <Button onClick={() => append(newContainerForm())} variant="outlined" color="primary">Add container</Button>
-              <Button type="submit" variant="contained" color="primary" style={{ marginLeft: 5 }}>Create Job</Button>
+              <div style={{display: 'inline-block', marginLeft: 5}}>
+                <SubmitButton isLoading={isSending}>Create Job</SubmitButton>
+              </div>
             </Grid>
           </Grid>
         </form>
       </Container>
+
+      <Snackbar open={snackbarMessage.open} autoHideDuration={6000} onClose={handleSnackbarClose}>
+        <MuiAlert elevation={6} variant="filled" onClose={handleSnackbarClose} severity={snackbarMessage.serverity}>
+          {snackbarMessage.message}
+        </MuiAlert>
+      </Snackbar>
     </div>
   );
 }
