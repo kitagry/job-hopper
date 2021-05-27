@@ -1,0 +1,48 @@
+name: Frontend CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - front/**
+
+jobs:
+  front-test:
+    name: Front CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Use Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16.x'
+
+      - name: Cache node_modules
+        uses: actions/cache@v1
+        id: cache
+        with:
+          path: ./front/node_modules
+          key: ${{ runner.os }}-front-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-front-
+
+      - name: Insatll packages
+        run: yarn install
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ./front
+
+      - name: Build
+        run: yarn build
+        working-directory: ./front
+
+      - name: Lint
+        run: yarn lint
+        working-directory: ./front
+
+      - name: Format
+        run: yarn prettier --check src/
+        working-directory: ./front
