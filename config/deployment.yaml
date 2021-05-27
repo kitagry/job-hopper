@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-hopper
+  labels:
+    app: job-hopper
+spec:
+  selector:
+    matchLabels:
+      app: job-hopper
+  template:
+    metadata:
+      labels:
+        app: job-hopper
+    spec:
+      serviceAccountName: job-hopper
+      containers:
+      - name: job-hopper
+        image: ghcr.io/kitagry/job-hopper

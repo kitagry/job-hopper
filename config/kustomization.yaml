@@ -1,0 +1,10 @@
+resources:
+- namespace.yaml
+- deployment.yaml
+- service.yaml
+- sa.yaml
+- cluster_role.yaml
+- cluster_role_binding.yaml
+
+# When you change this name. you should change namespace.yaml
+namespace: job-hopper
