@@ -260,7 +260,7 @@ mod tests {
             .path("/api/cronjob")
             .reply(&routes)
             .await;
-        assert_eq!(res.status(), 200, "GET is allowed");
+        assert_eq!(res.status(), 200);
 
         let expect = json!([{
             "cronjob_data": {
@@ -285,5 +285,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_job() {
+        let routes = handle(K8sClientMock {});
+        let request = json!({
+            "cronjob_data": {
+                "name": "test_cron_job",
+                "namespace": "default"
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "name": "test",
+                        "image": "test",
+                        "command": ["echo"],
+                        "args": ["hello world"],
+                        "env": []
+                    }
+                ]
+            }
+        });
+        let res = warp::test::request()
+            .path("/api/job")
+            .method("POST")
+            .body(request.to_string().as_bytes())
+            .header("Content-Type", "application/json")
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), 201);
+
+        let res_body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert!(res_body
+            .as_object()
+            .unwrap()
+            .contains_key("message"));
     }
 }
