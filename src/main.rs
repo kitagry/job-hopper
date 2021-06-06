@@ -1,9 +1,11 @@
+use async_trait::async_trait;
+use job_hopper::model::{Container, JobTemplate};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::batch::v1beta1::CronJob;
-use k8s_openapi::api::core::v1::{Container as K8sContainer, EnvVar, PodSpec};
+use k8s_openapi::api::core::v1::{Container as K8sContainer, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{
-    api::{Api, ListParams, PostParams},
+    api::{Api, ListParams, ObjectList, PostParams},
     Client,
 };
 use rand::distributions::Alphanumeric;
@@ -13,86 +15,49 @@ use serde_json::json;
 use std::convert::Infallible;
 use warp::{Filter, Reply};
 
+#[async_trait]
+trait K8sClient {
+    async fn list_cronjobs(&self, namespace: &str) -> Result<ObjectList<CronJob>, kube::Error>;
+    async fn get_cronjob(&self, namespace: &str, name: &str) -> Result<CronJob, kube::Error>;
+    async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job, kube::Error>;
+}
+
+#[derive(Clone)]
+struct K8sClientImpl(Client);
+
+#[async_trait]
+impl K8sClient for K8sClientImpl {
+    async fn list_cronjobs(&self, namespace: &str) -> Result<ObjectList<CronJob>, kube::Error> {
+        let cronjobs: Api<CronJob> = Api::namespaced(self.0.clone(), namespace);
+        let lp = ListParams::default().timeout(20);
+        cronjobs.list(&lp).await
+    }
+
+    async fn get_cronjob(&self, namespace: &str, name: &str) -> Result<CronJob, kube::Error> {
+        let cronjobs: Api<CronJob> = Api::namespaced(self.0.clone(), namespace);
+        cronjobs.get(name).await
+    }
+
+    async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job, kube::Error> {
+        let jobs: Api<Job> = Api::namespaced(self.0.clone(), namespace);
+        let pp = PostParams::default();
+        jobs.create(&pp, job).await
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 struct ListCronJobParam {
     namespace: Option<String>,
 }
 
-#[derive(Deserialize, Serialize)]
-struct JobTemplate {
-    cronjob_data: CronJobData,
-    spec: JobSpec,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CronJobData {
-    name: String,
-    namespace: String,
-}
-
-#[derive(Deserialize, Serialize)]
-struct JobSpec {
-    containers: Vec<Container>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct Container {
-    name: String,
-    image: String,
-    command: Vec<String>,
-    args: Vec<String>,
-    env: Vec<EnvVar>,
-}
-
-impl JobTemplate {
-    fn new(cj: CronJob) -> Self {
-        JobTemplate {
-            cronjob_data: CronJobData {
-                name: cj.metadata.name.unwrap_or_else(|| "".to_string()),
-                namespace: cj.metadata.namespace.unwrap_or_else(|| "".to_string()),
-            },
-            spec: JobSpec {
-                containers: cj
-                    .spec
-                    .unwrap()
-                    .job_template
-                    .spec
-                    .unwrap()
-                    .template
-                    .spec
-                    .unwrap()
-                    .containers
-                    .iter()
-                    .map(|c| Container::new(c.clone()))
-                    .collect(),
-            },
-        }
-    }
-}
-
-impl Container {
-    fn new(c: k8s_openapi::api::core::v1::Container) -> Self {
-        Container {
-            name: c.name,
-            image: c.image.unwrap_or_else(|| "".to_string()),
-            command: c.command.unwrap_or_default(),
-            args: c.args.unwrap_or_default(),
-            env: c.env.unwrap_or_default(),
-        }
-    }
-}
-
-async fn list_cronjobs(
-    k8s_client: Client,
+async fn list_cronjobs<T: K8sClient>(
+    k8s_client: T,
     params: ListCronJobParam,
 ) -> Result<impl Reply, Infallible> {
-    let cronjobs: Api<CronJob> = Api::namespaced(
-        k8s_client,
-        &params.namespace.unwrap_or_else(|| "".to_string()),
-    );
-    let lp = ListParams::default().timeout(20);
-
-    match cronjobs.list(&lp).await {
+    match k8s_client
+        .list_cronjobs(&params.namespace.unwrap_or_else(|| "".to_string()))
+        .await
+    {
         Ok(cronjobs) => {
             let cronjobs: Vec<JobTemplate> = cronjobs
                 .iter()
@@ -123,9 +88,14 @@ fn create_tmp_job_name(s: String) -> String {
     }
 }
 
-async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, Infallible> {
-    let cronjobs: Api<CronJob> = Api::namespaced(k8s_client.clone(), &job.cronjob_data.namespace);
-    let cronjob = match cronjobs.get(&job.cronjob_data.name).await {
+async fn create_job<T: K8sClient>(
+    k8s_client: T,
+    job: JobTemplate,
+) -> Result<impl Reply, Infallible> {
+    let cronjob = match k8s_client
+        .get_cronjob(&job.cronjob_data.namespace, &job.cronjob_data.name)
+        .await
+    {
         Ok(c) => c,
         Err(e) => {
             return Ok(warp::reply::with_status(
@@ -143,16 +113,17 @@ async fn create_job(k8s_client: Client, job: JobTemplate) -> Result<impl Reply, 
     });
     let new_job = Job {
         metadata: ObjectMeta {
-            name: Some(create_tmp_job_name(job.cronjob_data.name)),
+            name: Some(create_tmp_job_name(job.cronjob_data.name.clone())),
             namespace: Some(job.cronjob_data.namespace.clone()),
             ..Default::default()
         },
         spec: Some(job_spec),
         ..Default::default()
     };
-    let jobs: Api<Job> = Api::namespaced(k8s_client, &job.cronjob_data.namespace);
-    let pp = PostParams::default();
-    match jobs.create(&pp, &new_job).await {
+    match k8s_client
+        .create_job(&job.cronjob_data.name, &new_job)
+        .await
+    {
         Ok(_) => Ok(warp::reply::with_status(
             warp::reply::json(&json!({
                 "message": format!("job '{}' was created", new_job.metadata.name.unwrap())
@@ -208,7 +179,9 @@ fn merge_job_container(base: Vec<K8sContainer>, compare: Vec<Container>) -> Vec<
     result
 }
 
-fn with_k8s(k8s_client: Client) -> impl Filter<Extract = (Client,), Error = Infallible> + Clone {
+fn with_k8s<T: K8sClient + Clone + Send>(
+    k8s_client: T,
+) -> impl Filter<Extract = (T,), Error = Infallible> + Clone {
     warp::any().map(move || k8s_client.clone())
 }
 
@@ -219,15 +192,16 @@ fn json_body() -> impl Filter<Extract = (JobTemplate,), Error = warp::Rejection>
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = Client::try_default().await?;
+    let k8s_client = K8sClientImpl(client);
     let list_cronjobs = warp::path!("api" / "cronjob")
-        .and(with_k8s(client.clone()))
+        .and(with_k8s(k8s_client.clone()))
         .and(warp::query::<ListCronJobParam>())
         .and_then(list_cronjobs);
 
     let create_job = warp::post()
         .and(warp::path("api"))
         .and(warp::path("job"))
-        .and(with_k8s(client.clone()))
+        .and(with_k8s(k8s_client.clone()))
         .and(json_body())
         .and_then(create_job);
 
