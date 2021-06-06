@@ -86,7 +86,7 @@ async fn create_job<T: K8sClient>(
         ..Default::default()
     };
     match k8s_client
-        .create_job(&job.cronjob_data.name, &new_job)
+        .create_job(&job.cronjob_data.namespace, &new_job)
         .await
     {
         Ok(_) => Ok(warp::reply::with_status(
