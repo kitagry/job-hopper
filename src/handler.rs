@@ -165,7 +165,7 @@ pub fn handle<T: K8sClient + Clone + Send + Sync>(
     let create_job = warp::post()
         .and(warp::path("api"))
         .and(warp::path("job"))
-        .and(with_k8s(k8s_client.clone()))
+        .and(with_k8s(k8s_client))
         .and(json_body())
         .and_then(create_job);
 
@@ -177,12 +177,11 @@ pub fn handle<T: K8sClient + Clone + Send + Sync>(
 
     let other_static_files = warp::fs::dir("./build/");
 
-    let routes = other_static_files
+    other_static_files
         .or(list_cronjobs)
         .or(create_job)
         .or(index_file)
-        .or(static_files);
-    routes
+        .or(static_files)
 }
 
 #[cfg(test)]
@@ -229,12 +228,17 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct K8sClientMock {}
+    struct K8sClientMock {
+        list_cronjobs: Result<Vec<CronJob>, String>,
+    }
 
     #[async_trait]
     impl K8sClient for K8sClientMock {
         async fn list_cronjobs(&self, _namespace: &str) -> Result<Vec<CronJob>, kube::Error> {
-            Ok(vec![new_cronjob()])
+            match self.list_cronjobs.clone() {
+                Ok(o) => Ok(o),
+                Err(e) => Err(kube::Error::RequestValidation(e)),
+            }
         }
 
         async fn get_cronjob(
@@ -254,7 +258,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_cronjobs() {
-        let routes = handle(K8sClientMock {});
+        let routes = handle(K8sClientMock {
+            list_cronjobs: Ok(vec![new_cronjob()]),
+        });
 
         let res = warp::test::request()
             .path("/api/cronjob")
@@ -284,8 +290,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_cronjobs_fail() {
+        let routes = handle(K8sClientMock {
+            list_cronjobs: Err("failed to list cronjob".to_string()),
+        });
+
+        let res = warp::test::request()
+            .path("/api/cronjob")
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), 500);
+
+        let expect = json!({
+            "message": "Request validation failed with failed to list cronjob"
+        });
+        let res_body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert_eq!(res_body, expect);
+    }
+
+    #[tokio::test]
     async fn test_create_job() {
-        let routes = handle(K8sClientMock {});
+        let routes = handle(K8sClientMock {
+            list_cronjobs: Err("not found".to_string()),
+        });
         let request = json!({
             "cronjob_data": {
                 "name": "test_cron_job",
@@ -313,9 +340,6 @@ mod tests {
         assert_eq!(res.status(), 201);
 
         let res_body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
-        assert!(res_body
-            .as_object()
-            .unwrap()
-            .contains_key("message"));
+        assert!(res_body.as_object().unwrap().contains_key("message"));
     }
 }
