@@ -184,3 +184,106 @@ pub fn handle<T: K8sClient + Clone + Send + Sync>(
         .or(static_files);
     routes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use k8s_openapi::api::batch::v1::{Job, JobSpec};
+    use k8s_openapi::api::batch::v1beta1::{CronJob, CronJobSpec, JobTemplateSpec};
+    use k8s_openapi::api::core::v1::{Container, PodSpec, PodTemplateSpec};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use serde_json::json;
+
+    fn new_cronjob() -> CronJob {
+        CronJob {
+            metadata: ObjectMeta {
+                name: Some("test_cron_job".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: Some(CronJobSpec {
+                job_template: JobTemplateSpec {
+                    spec: Some(JobSpec {
+                        template: PodTemplateSpec {
+                            spec: Some(PodSpec {
+                                containers: vec![Container {
+                                    name: "test".to_string(),
+                                    image: Some("test".to_string()),
+                                    command: Some(vec!["echo".to_string()]),
+                                    args: Some(vec!["hello world".to_string()]),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[derive(Clone)]
+    struct K8sClientMock {}
+
+    #[async_trait]
+    impl K8sClient for K8sClientMock {
+        async fn list_cronjobs(&self, _namespace: &str) -> Result<Vec<CronJob>, kube::Error> {
+            Ok(vec![new_cronjob()])
+        }
+
+        async fn get_cronjob(
+            &self,
+            _namespace: &str,
+            _nameme: &str,
+        ) -> Result<CronJob, kube::Error> {
+            Ok(new_cronjob())
+        }
+
+        async fn create_job(&self, _namespace: &str, _job: &Job) -> Result<Job, kube::Error> {
+            Ok(Job {
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_cronjobs() {
+        let routes = handle(K8sClientMock {});
+
+        let res = warp::test::request()
+            .path("/api/cronjob")
+            .reply(&routes)
+            .await;
+        assert_eq!(res.status(), 200, "GET is allowed");
+
+        let expect = json!([{
+            "cronjob_data": {
+                "name": "test_cron_job",
+                "namespace": "default"
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "name": "test",
+                        "image": "test",
+                        "command": ["echo"],
+                        "args": ["hello world"],
+                        "env": []
+                    }
+                ]
+            }
+        }]);
+        let res_body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
+        assert_eq!(res_body, expect);
+    }
+
+    #[tokio::test]
+    async fn test_create_job() {
+    }
+}

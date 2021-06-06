@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::batch::v1beta1::CronJob;
 use kube::{
-    api::{Api, ListParams, ObjectList, PostParams},
+    api::{Api, ListParams, PostParams},
     Client,
 };
 
 #[async_trait]
 pub trait K8sClient {
-    async fn list_cronjobs(&self, namespace: &str) -> Result<ObjectList<CronJob>, kube::Error>;
+    async fn list_cronjobs(&self, namespace: &str) -> Result<Vec<CronJob>, kube::Error>;
     async fn get_cronjob(&self, namespace: &str, name: &str) -> Result<CronJob, kube::Error>;
     async fn create_job(&self, namespace: &str, job: &Job) -> Result<Job, kube::Error>;
 }
@@ -24,10 +24,10 @@ impl K8sClientImpl {
 
 #[async_trait]
 impl K8sClient for K8sClientImpl {
-    async fn list_cronjobs(&self, namespace: &str) -> Result<ObjectList<CronJob>, kube::Error> {
+    async fn list_cronjobs(&self, namespace: &str) -> Result<Vec<CronJob>, kube::Error> {
         let cronjobs: Api<CronJob> = Api::namespaced(self.0.clone(), namespace);
         let lp = ListParams::default().timeout(20);
-        cronjobs.list(&lp).await
+        Ok(cronjobs.list(&lp).await?.items)
     }
 
     async fn get_cronjob(&self, namespace: &str, name: &str) -> Result<CronJob, kube::Error> {
